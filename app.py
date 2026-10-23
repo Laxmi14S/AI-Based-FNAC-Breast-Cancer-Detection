@@ -130,9 +130,10 @@ def html(s):
     st.markdown("".join(line.strip() for line in s.splitlines()), unsafe_allow_html=True)
 
 
+# ================= MODEL =================
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model("breast_cancer_fnac_model.h5")
+    return tf.keras.models.load_model("breast_cancer_fnac_model.h5", compile=False)
 
 
 try:
@@ -148,26 +149,60 @@ def preprocess(pil_img):
     return img, np.expand_dims(np.array(img, dtype="float32"), 0) / 255.0
 
 
-def make_gradcam_heatmap(img_array, layer_name):
-    grad_model = tf.keras.models.Model([model.inputs], [model.get_layer(layer_name).output, model.output])
+def predict_probs(x):
+    """Return (benign_prob, malignant_prob) for 1-neuron sigmoid or 2-neuron softmax output."""
+    preds = model.predict(x, verbose=0)
+    if preds.shape[-1] == 1:
+        mal = float(preds[0][0])
+    else:
+        mal = float(preds[0][1])
+    return 1.0 - mal, mal
+
+
+# ================= GRAD-CAM =================
+def find_target_layer():
+    """Last top-level layer that outputs a 4D feature map (Conv2D, or a nested base model)."""
+    candidates = []
+    for layer in model.layers:
+        try:
+            shape = layer.output.shape
+        except Exception:
+            continue
+        if len(shape) == 4:
+            candidates.append(layer)
+    if not candidates:
+        raise ValueError("No convolutional (4D) layer found in this model.")
+    convs = [l for l in candidates if isinstance(l, tf.keras.layers.Conv2D)]
+    nested = [l for l in candidates if isinstance(l, tf.keras.Model)]
+    if nested:                      # transfer-learning base: its output is the final feature map
+        return nested[-1]
+    return (convs or candidates)[-1]
+
+
+def make_gradcam_heatmap(img_array):
+    model(img_array)  # make sure the model is built
+    target = find_target_layer()
+    grad_model = tf.keras.models.Model(model.inputs, [target.output, model.output])
     with tf.GradientTape() as tape:
         conv_outputs, predictions = grad_model(img_array)
-        loss = predictions[:, 0]
+        class_idx = 0 if predictions.shape[-1] == 1 else 1   # malignant class
+        loss = predictions[:, class_idx]
     grads = tape.gradient(loss, conv_outputs)
     pooled = tf.reduce_mean(grads, axis=(0, 1, 2))
-    heatmap = np.maximum(tf.squeeze(conv_outputs[0] @ pooled[..., tf.newaxis]), 0)
-    if heatmap.max() != 0:
+    heatmap = tf.reduce_sum(conv_outputs[0] * pooled, axis=-1)
+    heatmap = tf.maximum(heatmap, 0).numpy()
+    if heatmap.max() > 0:
         heatmap /= heatmap.max()
     return heatmap
 
 
 def overlay_gradcam(orig_rgb, x):
-    layer = [l.name for l in model.layers if "conv" in l.name.lower()][-1]
-    hm = cv2.resize(np.array(make_gradcam_heatmap(x, layer)), (224, 224))
+    hm = cv2.resize(make_gradcam_heatmap(x), (224, 224))
     hm = cv2.cvtColor(cv2.applyColorMap(np.uint8(255 * hm), cv2.COLORMAP_JET), cv2.COLOR_BGR2RGB)
     return cv2.addWeighted(orig_rgb, 0.65, hm, 0.45, 0)
 
 
+# ================= PDF =================
 def build_pdf(result, conf, final_rgb):
     pdf = FPDF()
     pdf.add_page()
@@ -247,17 +282,17 @@ else:
             st.error("That file could not be read as an image. Please upload a valid JPG or PNG.")
             st.stop()
 
+        gc_error = None
         with st.spinner("Analyzing image..."):
-            preds = model.predict(x, verbose=0)
-            mal = float(preds[0][0]) if preds.shape[-1] == 1 else float(preds[0][1])
-            ben = 1.0 - mal
+            ben, mal = predict_probs(x)
             result = "Malignant" if mal > 0.5 else "Benign"
             conf = max(mal, ben) * 100
             orig_rgb = np.array(orig_img)
             try:
                 final = overlay_gradcam(orig_rgb, x)
-            except Exception:
+            except Exception as e:
                 final = None
+                gc_error = repr(e)
 
         left, right = st.columns([1, 1.35], gap="large")
         with left:
@@ -280,7 +315,9 @@ else:
             if final is not None:
                 c2.image(final, caption="🔥 Grad-CAM heatmap", use_container_width=True)
             else:
-                c2.info("Heatmap unavailable for this model.")
+                c2.warning("Heatmap could not be generated.")
+                with c2.expander("Technical details"):
+                    st.code(gc_error)
 
         if final is not None:
             st.write("")
