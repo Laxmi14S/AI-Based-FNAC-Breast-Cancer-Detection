@@ -130,10 +130,10 @@ def html(s):
     st.markdown("".join(line.strip() for line in s.splitlines()), unsafe_allow_html=True)
 
 
-# ================= MODEL =================
+# ================= MODEL (same as your original code) =================
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model("breast_cancer_fnac_model.h5", compile=False)
+    return tf.keras.models.load_model("breast_cancer_fnac_model.h5")
 
 
 try:
@@ -145,61 +145,34 @@ except Exception as e:
 
 
 def preprocess(pil_img):
+    # Nearest-neighbour resize matches Keras load_img's default, so predictions stay identical
     img = pil_img.convert("RGB").resize((224, 224), Image.NEAREST)
     return img, np.expand_dims(np.array(img, dtype="float32"), 0) / 255.0
 
 
-def predict_probs(x):
-    """Return (benign_prob, malignant_prob) for 1-neuron sigmoid or 2-neuron softmax output."""
-    preds = model.predict(x, verbose=0)
-    if preds.shape[-1] == 1:
-        mal = float(preds[0][0])
-    else:
-        mal = float(preds[0][1])
-    return 1.0 - mal, mal
-
-
-# ================= GRAD-CAM =================
-def find_target_layer():
-    """Last top-level layer that outputs a 4D feature map (Conv2D, or a nested base model)."""
-    candidates = []
-    for layer in model.layers:
-        try:
-            shape = layer.output.shape
-        except Exception:
-            continue
-        if len(shape) == 4:
-            candidates.append(layer)
-    if not candidates:
-        raise ValueError("No convolutional (4D) layer found in this model.")
-    convs = [l for l in candidates if isinstance(l, tf.keras.layers.Conv2D)]
-    nested = [l for l in candidates if isinstance(l, tf.keras.Model)]
-    if nested:                      # transfer-learning base: its output is the final feature map
-        return nested[-1]
-    return (convs or candidates)[-1]
-
-
-def make_gradcam_heatmap(img_array):
-    model(img_array)  # make sure the model is built
-    target = find_target_layer()
-    grad_model = tf.keras.models.Model(model.inputs, [target.output, model.output])
+# ================= GRAD-CAM (your original working logic) =================
+def make_gradcam_heatmap(img_array, model, layer_name):
+    grad_model = tf.keras.models.Model(
+        [model.inputs], [model.get_layer(layer_name).output, model.output]
+    )
     with tf.GradientTape() as tape:
         conv_outputs, predictions = grad_model(img_array)
-        class_idx = 0 if predictions.shape[-1] == 1 else 1   # malignant class
-        loss = predictions[:, class_idx]
+        loss = predictions[:, 0]
     grads = tape.gradient(loss, conv_outputs)
-    pooled = tf.reduce_mean(grads, axis=(0, 1, 2))
-    heatmap = tf.reduce_sum(conv_outputs[0] * pooled, axis=-1)
-    heatmap = tf.maximum(heatmap, 0).numpy()
-    if heatmap.max() > 0:
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+    heatmap = np.maximum(tf.squeeze(conv_outputs[0] @ pooled_grads[..., tf.newaxis]), 0)
+    if heatmap.max() != 0:
         heatmap /= heatmap.max()
     return heatmap
 
 
 def overlay_gradcam(orig_rgb, x):
-    hm = cv2.resize(make_gradcam_heatmap(x), (224, 224))
-    hm = cv2.cvtColor(cv2.applyColorMap(np.uint8(255 * hm), cv2.COLORMAP_JET), cv2.COLOR_BGR2RGB)
-    return cv2.addWeighted(orig_rgb, 0.65, hm, 0.45, 0)
+    conv_layers = [l.name for l in model.layers if "conv" in l.name.lower()]
+    heatmap = make_gradcam_heatmap(x, model, conv_layers[-1])
+    heatmap = cv2.resize(np.array(heatmap), (224, 224))
+    heatmap = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
+    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+    return cv2.addWeighted(orig_rgb, 0.65, heatmap, 0.45, 0)
 
 
 # ================= PDF =================
@@ -284,7 +257,9 @@ else:
 
         gc_error = None
         with st.spinner("Analyzing image..."):
-            ben, mal = predict_probs(x)
+            preds = model.predict(x, verbose=0)
+            mal = float(preds[0][0]) if preds.shape[-1] == 1 else float(preds[0][1])
+            ben = 1.0 - mal
             result = "Malignant" if mal > 0.5 else "Benign"
             conf = max(mal, ben) * 100
             orig_rgb = np.array(orig_img)
