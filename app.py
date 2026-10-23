@@ -11,7 +11,7 @@ from PIL import Image
 st.set_page_config(page_title="FNAC AI Screening", page_icon="🔬", layout="wide")
 
 # ---- Replace with the real numbers from your notebook ----
-STATS = [("🎯", "Accuracy", "~91%"), ("🖼️", "Input size", "224×224"),
+STATS = [("🎯", "Accuracy", "~95%"), ("🖼️", "Input size", "224×224"),
          ("🧬", "Classes", "2"), ("🔥", "Explainability", "Grad-CAM")]
 
 CSS = """
