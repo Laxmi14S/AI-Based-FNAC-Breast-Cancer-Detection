@@ -1,132 +1,62 @@
+import os
+import tempfile
+
+import cv2
+import numpy as np
 import streamlit as st
 import tensorflow as tf
-import numpy as np
-import cv2
-from PIL import Image
-import tempfile, os, base64
 from fpdf import FPDF
+from PIL import Image
 
-# --------------------------------------
-# PAGE CONFIG
-# --------------------------------------
-st.set_page_config(page_title="AI FNAC Breast Cancer Detection", layout="wide")
+st.set_page_config(page_title="FNAC AI Screening", page_icon="🔬", layout="wide")
 
-# --------------------------------------
-# PREMIUM PURPLE-BLUE LIGHT GLASS UI
-# --------------------------------------
-glass_ui_c = """
+# ---- Edit these with the real numbers from your notebook ----
+MODEL_STATS = {"Accuracy": "~91%", "Input size": "224 x 224", "Classes": "Benign / Malignant"}
+
+st.markdown("""
 <style>
-.stApp {
-  background: linear-gradient(160deg, #f3f6ff 0%, #eef2ff 50%, #f7f9ff 100%);
-  min-height: 100vh;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial;
-}
-
-/* Header */
-.header h1{
-  color:#4f46e5; font-size:42px; text-align:center; margin-top:18px; font-weight:800;
-}
-.header p{ text-align:center; color:#000000 !important; font-size:18px; }
-
-/* Glass Card */
-.glass-card{ background:rgba(255,255,255,.88); border-radius:16px; padding:26px; margin:18px;
-  box-shadow:0 10px 30px rgba(15,23,42,0.06); backdrop-filter:blur(8px); color:#000000 !important;
-}
-
-/* Upload box */
-.upload-box{background:rgba(255,255,255,.96); padding:14px; border-radius:10px; color !important;}
-div[data-testid="stFileUploader"] { color:#000 !important; }
-
-/* Prediction */
-.prediction-box{ background:rgba(255,255,255,.9); padding:20px; margin-top:16px; border-radius:12px;
- text-align:center; font-size:20px; font-weight:700; border:1px solid rgba(79,70,229,.15); color:#4f46e5;}
-
-/* Buttons */
-button[data-testid="baseButton-secondary"]{
-  background:linear-gradient(90deg,#4f46e5,#7c3aed) !important; color:black !important; font-weight:600;
-}
-
-/* Dashboard Text Black */
-.dashboard-text, .dashboard-text p, .dashboard-text h3, .dashboard-text strong, .dashboard-text span {
-  color: #000000 !important;
-}
-/* Image caption text color black */
-.css-1i9za0i, .e1ewe7hr3, figcaption {
-    color: #000000 !important;
-    font-weight: 600 !important;
-}
-/* Change st.metric label color */
-div[data-testid="metric-container"] label {
-    color: #1e3a8a !important;   /* Dark blue */
-    font-weight: 700 !important;
-}
-
-/* Change st.metric value color */
-div[data-testid="metric-container"] div {
-    color: #7c3aed !important;   /* Purple */
-    font-size: 22px !important;
-    font-weight: 800 !important;
-}
-/* ===== FIXED st.metric COLORS (Latest Streamlit) ===== */
-
-/* Metric label (Model Type, Status, Explainability) */
-div[data-testid="stMetricLabel"] {
-    color: #1e3a8a !important;   /* Dark Blue */
-    font-weight: 700 !important;
-    font-size: 16px !important;
-}
-
-/* Metric value (CNN-FNAC, Active, Grad-CAM Enabled) */
-div[data-testid="stMetricValue"] {
-    color: #7c3aed !important;   /* Purple */
-    font-weight: 800 !important;
-    font-size: 22px !important;
-}
-/* ===== FORCE COLOR FOR st.metric LABELS ===== */
-div[data-testid="stMetric"] > label,
-div[data-testid="stMetricLabel"],
-div[data-testid="stMetric"] label {
-    color: #dc2626 !important;   /* 🔴 Red (change as you like) */
-    font-weight: 800 !important;
-    font-size: 17px !important;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-/* ===== FORCE COLOR FOR st.metric VALUES ===== */
-div[data-testid="stMetricValue"] {
-    color: #16a34a !important;   /* 🟢 Green */
-    font-weight: 900 !important;
-    font-size: 23px !important;
-}
-
-
+#MainMenu, footer {visibility: hidden;}
+.block-container {padding-top: 1.5rem; max-width: 1100px;}
+.hero {background: linear-gradient(135deg,#4f46e5,#7c3aed); border-radius: 18px;
+       padding: 34px 30px; color: #fff; margin-bottom: 20px;}
+.hero h1 {margin: 0; font-size: 34px; color: #fff;}
+.hero p {margin: 8px 0 0; font-size: 16px; opacity: .92; color: #fff;}
+.card {background: #fff; border-radius: 14px; padding: 20px;
+       box-shadow: 0 6px 22px rgba(15,23,42,.07); border: 1px solid #e8ebf7;}
+.result {border-radius: 14px; padding: 22px; text-align: center; border: 2px solid;}
+.result h2 {margin: 0; font-size: 30px;}
+.benign {background: #ecfdf5; border-color: #16a34a; color: #166534;}
+.malignant {background: #fef2f2; border-color: #dc2626; color: #991b1b;}
+.disclaimer {background: #fffbeb; border-left: 4px solid #f59e0b; padding: 12px 16px;
+             border-radius: 8px; font-size: 14px; color: #78350f;}
+.stButton>button, .stDownloadButton>button {
+    background: linear-gradient(90deg,#4f46e5,#7c3aed); color: #fff; border: 0;
+    border-radius: 10px; padding: 10px 22px; font-weight: 600;}
+.stButton>button:hover, .stDownloadButton>button:hover {color: #fff; opacity: .92;}
 </style>
-"""
-st.markdown(glass_ui_c, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# --------------------------------------
-# SIDEBAR MENU
-# --------------------------------------
-st.sidebar.title("📍 Navigation")
-page = st.sidebar.radio("Go to:", ["🏠 Dashboard", "🧠 AI Model"])
 
-# --------------------------------------
-# MODEL LOADING
-# --------------------------------------
 @st.cache_resource
 def load_model():
     return tf.keras.models.load_model("breast_cancer_fnac_model.h5")
 
+
 try:
     model = load_model()
-except:
-    st.error("⚠ Model not found. Place 'breast_cancer_fnac_model.h5' near app.py.")
+except Exception as e:
+    st.error("Model file 'breast_cancer_fnac_model.h5' could not be loaded.")
+    st.caption(str(e))
     st.stop()
 
-# --------------------------------------
-# GRAD-CAM FUNCTION
-# --------------------------------------
+
+def preprocess(pil_img):
+    # NEAREST matches Keras load_img's default, so predictions stay identical to training-time loading
+    img = pil_img.convert("RGB").resize((224, 224), Image.NEAREST)
+    arr = np.array(img, dtype="float32")
+    return img, np.expand_dims(arr, 0) / 255.0
+
+
 def make_gradcam_heatmap(img_array, model, layer_name):
     grad_model = tf.keras.models.Model(
         [model.inputs], [model.get_layer(layer_name).output, model.output]
@@ -135,98 +65,122 @@ def make_gradcam_heatmap(img_array, model, layer_name):
         conv_outputs, predictions = grad_model(img_array)
         loss = predictions[:, 0]
     grads = tape.gradient(loss, conv_outputs)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    heatmap = np.maximum(tf.squeeze(conv_outputs[0] @ pooled_grads[..., tf.newaxis]), 0)
-    if heatmap.max() != 0: heatmap /= heatmap.max()
+    pooled = tf.reduce_mean(grads, axis=(0, 1, 2))
+    heatmap = np.maximum(tf.squeeze(conv_outputs[0] @ pooled[..., tf.newaxis]), 0)
+    if heatmap.max() != 0:
+        heatmap /= heatmap.max()
     return heatmap
 
-# --------------------------------------
-# DASHBOARD PAGE
-# --------------------------------------
-if page == "🏠 Dashboard":
-    st.markdown("<div class='header'><h1>📊 FNAC AI Dashboard</h1>"
-                "<p>Welcome to the Smart Diagnostics Dashboard</p></div>", unsafe_allow_html=True)
 
+def overlay_gradcam(orig_rgb, x):
+    conv_layers = [l.name for l in model.layers if "conv" in l.name.lower()]
+    heatmap = make_gradcam_heatmap(x, model, conv_layers[-1])
+    heatmap = cv2.resize(np.array(heatmap), (224, 224))
+    heatmap = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
+    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+    return cv2.addWeighted(orig_rgb, 0.65, heatmap, 0.45, 0)
+
+
+def build_pdf(result, conf, final_rgb):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=15)
+    pdf.cell(190, 10, txt="AI FNAC Screening Report", ln=True, align="C")
+    pdf.set_font("Arial", size=12)
+    pdf.ln(6)
+    pdf.cell(190, 9, txt=f"AI prediction: {result}", ln=True)
+    pdf.cell(190, 9, txt=f"Model confidence: {conf:.2f}%", ln=True)
+    pdf.set_font("Arial", size=10)
+    pdf.multi_cell(190, 6, txt="Research prototype. Not a medical diagnosis. "
+                               "Consult a qualified pathologist.")
+    with tempfile.TemporaryDirectory() as d:
+        img_path, pdf_path = os.path.join(d, "g.png"), os.path.join(d, "r.pdf")
+        cv2.imwrite(img_path, cv2.cvtColor(final_rgb, cv2.COLOR_RGB2BGR))
+        pdf.image(img_path, x=30, y=75, w=150)
+        pdf.output(pdf_path)
+        with open(pdf_path, "rb") as f:
+            return f.read()
+
+
+st.markdown("""
+<div class="hero">
+  <h1>🔬 FNAC AI Screening</h1>
+  <p>Upload a cytology image. A CNN predicts benign or malignant, and Grad-CAM shows
+  which regions influenced the decision.</p>
+</div>
+""", unsafe_allow_html=True)
+
+tab_analyze, tab_about = st.tabs(["🧠 Analyze image", "ℹ️ About the model"])
+
+with tab_analyze:
+    st.markdown(
+        "<div class='disclaimer'><b>Research prototype.</b> Not a medical device and not a "
+        "diagnosis. Results must be reviewed by a qualified pathologist.</div>",
+        unsafe_allow_html=True)
+    st.write("")
+
+    uploaded = st.file_uploader("Upload an FNAC image (JPG or PNG)", type=["jpg", "jpeg", "png"])
+
+    if uploaded:
+        try:
+            pil_img = Image.open(uploaded)
+            orig_img, x = preprocess(pil_img)
+        except Exception:
+            st.error("That file could not be read as an image. Please upload a valid JPG or PNG.")
+            st.stop()
+
+        with st.spinner("Analyzing image..."):
+            preds = model.predict(x, verbose=0)
+            malignant = float(preds[0][0]) if preds.shape[-1] == 1 else float(preds[0][1])
+            benign = 1.0 - malignant
+            result = "Malignant" if malignant > 0.5 else "Benign"
+            conf = max(malignant, benign) * 100
+            orig_rgb = np.array(orig_img)
+            try:
+                final = overlay_gradcam(orig_rgb, x)
+            except Exception:
+                final = None
+
+        left, right = st.columns([1, 1.3], gap="large")
+        with left:
+            css = "malignant" if result == "Malignant" else "benign"
+            st.markdown(
+                f"<div class='result {css}'><div style='font-size:13px;letter-spacing:1px'>"
+                f"AI PREDICTION</div><h2>{result}</h2>"
+                f"<div style='font-size:15px'>{conf:.1f}% confidence</div></div>",
+                unsafe_allow_html=True)
+            st.write("")
+            st.caption("Class probabilities")
+            st.progress(benign, text=f"Benign: {benign * 100:.1f}%")
+            st.progress(malignant, text=f"Malignant: {malignant * 100:.1f}%")
+
+        with right:
+            c1, c2 = st.columns(2)
+            c1.image(orig_rgb, caption="Original image", use_container_width=True)
+            if final is not None:
+                c2.image(final, caption="Grad-CAM heatmap", use_container_width=True)
+            else:
+                c2.info("Heatmap unavailable for this model.")
+
+        if final is not None:
+            st.write("")
+            st.download_button("⬇ Download screening report (PDF)",
+                               data=build_pdf(result, conf, final),
+                               file_name="FNAC_Report.pdf", mime="application/pdf")
+    else:
+        st.info("Upload an image above to see the prediction and heatmap.")
+
+with tab_about:
+    cols = st.columns(len(MODEL_STATS))
+    for col, (k, v) in zip(cols, MODEL_STATS.items()):
+        col.metric(k, v)
     st.markdown("""
-    <div class='glass-card dashboard-text'>
-        <h3>🌟 Dashboard Overview</h3>
-        <p>This AI platform detects breast cancer from FNAC microscopic images and highlights malignant regions using <strong>Explainable AI Grad-CAM</strong>.</p>
-    </div>
-    """, unsafe_allow_html=True)
+**How it works**
+1. The image is resized to 224 x 224 and normalized.
+2. A convolutional neural network (CNN) outputs the probability of malignancy.
+3. Grad-CAM highlights the regions that most influenced the prediction.
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Model Type", "CNN - FNAC")
-    col2.metric("Status", "Active")
-    col3.metric("Explainability", "Grad-CAM Enabled")
-
-    st.info("➡ Switch to **AI Model** tab from the left to upload and test images.")
-
-# --------------------------------------
-# MODEL PAGE
-# --------------------------------------
-if page == "🧠 AI Model":
-
-    st.markdown("<div class='header'><h1>🧠 FNAC Breast Cancer Prediction</h1></div>", unsafe_allow_html=True)
-
-    st.markdown("<div class='glass-card'><div class='upload-box'><strong>📤 Upload FNAC Image</strong></div>", unsafe_allow_html=True)
-    uploaded_file = st.file_uploader("", type=["jpg", "jpeg", "png"])
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    if uploaded_file:
-        temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        temp.write(uploaded_file.read()); temp.flush()
-
-        img = tf.keras.preprocessing.image.load_img(temp.name, target_size=(224, 224))
-        x = np.expand_dims(tf.keras.preprocessing.image.img_to_array(img), 0) / 255.0
-
-        preds = model.predict(x)
-        malignant_prob = float(preds[0][0]) if preds.shape[-1] == 1 else float(preds[0][1])
-        benign_prob = 1.0 - malignant_prob
-        result = "Malignant" if malignant_prob > 0.5 else "Benign"
-        conf = max(malignant_prob, benign_prob) * 100
-
-        st.markdown(f"<div class='prediction-box'>{result}<br><span style='font-size:14px'>{conf:.2f}% Confidence</span></div>", unsafe_allow_html=True)
-
-        # GRAD CAM
-        conv_layers = [l.name for l in model.layers if 'conv' in l.name.lower()]
-        heatmap = make_gradcam_heatmap(x, model, conv_layers[-1])
-
-        orig = cv2.cvtColor(cv2.imread(temp.name), cv2.COLOR_BGR2RGB)
-        orig = cv2.resize(orig, (224, 224))
-        heatmap = cv2.resize(heatmap, (224, 224))
-        heatmap = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
-        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
-        final = cv2.addWeighted(orig, 0.65, heatmap, 0.45, 0)
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.image(orig, use_container_width=True)
-            st.markdown("<p style='text-align:center; color:#000; font-size:18px; font-weight:700;'>Original FNAC Image</p>", unsafe_allow_html=True)
-
-        with col2:
-            st.image(final, use_container_width=True)
-            st.markdown("<p style='text-align:center; color:#000; font-size:18px; font-weight:700;'>🔥 Grad-CAM Heatmap</p>", unsafe_allow_html=True)
-
-
-
-        # REPORT GENERATION
-        if st.button("📄 Generate Diagnosis Report"):
-            pdf = FPDF()
-            pdf.add_page(); pdf.set_font("Arial", size=14)
-            pdf.cell(200, 10, txt="AI FNAC Breast Cancer Diagnostic Report", ln=True, align='C')
-            pdf.ln(10)
-            pdf.set_font("Arial", size=12)
-            pdf.cell(200, 10, txt=f"Diagnosis Result: {result}", ln=True)
-            pdf.cell(200, 10, txt=f"Confidence: {conf:.2f}%", ln=True)
-            pdf.ln(10)
-            final_img_path = "gradcam_result.png"
-            cv2.imwrite(final_img_path, cv2.cvtColor(final, cv2.COLOR_RGB2BGR))
-            pdf.image(final_img_path, x=10, y=60, w=180)
-            report_path = "FNAC_Report.pdf"
-            pdf.output(report_path)
-
-            with open(report_path, "rb") as f:
-                st.download_button("⬇ Download Report PDF", f, file_name="FNAC_Report.pdf")
-
-        os.remove(temp.name)
+**Limitations**
+- Trained on a limited dataset; performance on images from other labs or stains may differ.
+- Intended for learning and research, not clinical use.
+""")
